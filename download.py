@@ -1,14 +1,16 @@
 #!/usr/bin/python
+import gzip
+import logging
 import os
-import re
+import pickle
 import sys
+import time
 import urllib.request
 from zipfile import ZipFile
 
-import requests
-from bs4 import BeautifulSoup
+import numpy as np
 
-from constants import DATA_FILES, DATA_WEB_ROOT, NUMS_REGIONS, REGIONS_NUMS
+from constants import DATA_FILES, DATA_HEADER, DATA_WEB_ROOT, REGIONS_NUMS
 
 MIN_PYTHON = (3, 8)
 if sys.version_info < MIN_PYTHON:
@@ -65,19 +67,39 @@ class DataDownloader:
             The length of the both list is the same. Also shape property of all NumPy arrays is
             the same.
         :param region: The three-char shortcut of the region name.
-        :return: Tuple of two lists, described above.
+        :return: Tuple of the Python list and NumPy array, like described above.
         """
         # Download data
         downloader.download_data()
 
-        zipfile = ZipFile(self.folder + "datagis2016.zip", "r")
-        for file in zipfile.filelist:
-            try:
-                filename = int(file.filename[:2])
-            except ValueError:
-                continue
-            if filename == REGIONS_NUMS[region]:
-                print(zipfile.read(file.filename).decode('1250').split(os.linesep)[0])
+        zipfiles = [ZipFile(self.folder + data_file, "r") for data_file in DATA_FILES.values()]
+
+        data_array = np.ndarray
+        data_list = []
+        for file in zipfiles:  # Walk through all the years
+            for filelist in file.filelist:  # Walk through all the regions
+                try:
+                    filename = int(filelist.filename[:2])
+                except ValueError:
+                    continue
+                if filename == REGIONS_NUMS[region]:
+                    logging.info(f"Processing {filelist.filename}.")
+                    print(f"Processing {filelist.filename} inside {file}.")
+                    # Process all the records in the region
+
+                    for i, row in enumerate(file.read(filelist.filename).decode('1250').split(
+                            os.linesep)):
+                        if len(row.split(';')) != 64:
+                            continue
+                        data_list.append(row.split(';'))
+                    data_array = np.vstack(data_list)
+                    break  # There should be only one file for each region.
+                break
+
+            data_array = np.column_stack((data_array, (np.full(data_array.shape[0], REGIONS_NUMS[
+                region]))))
+
+        return DATA_HEADER, data_array
 
     def get_list(self, regions=REGIONS_NUMS.keys()):
         """
@@ -89,8 +111,7 @@ class DataDownloader:
 
 
 if __name__ == "__main__":
-    # region, data = DataDownloader().get_list(['PHA', 'JHM', 'VYS'])
-    # for region, data in (region, data):
-    #    print(region, data.shape)
     downloader = DataDownloader()
-    downloader.parse_region_data("PHA")
+
+    with gzip.GzipFile(downloader.cash_filename.format("ej"), 'w') as f:
+        pickle.dump(downloader.parse_region_data("PHA"), f)
