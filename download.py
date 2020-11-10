@@ -18,7 +18,7 @@ if sys.version_info < MIN_PYTHON:
 
 
 class DataDownloader:
-    parsed_regions = ()
+    parsed_regions = {}
 
     def __init__(
         self,
@@ -35,6 +35,8 @@ class DataDownloader:
         self.url = url
         self.folder = folder if folder.endswith(os.path.sep) else folder + os.path.sep
         self.cash_filename = cache_filename
+        for key in REGIONS_NUMS.keys():
+            self.parsed_regions[key] = None
 
     def download_data(self):
         """
@@ -70,11 +72,11 @@ class DataDownloader:
         :return: Tuple of the Python list and NumPy array, like described above.
         """
         # Download data
-        downloader.download_data()
+        self.download_data()
 
         zipfiles = [ZipFile(self.folder + data_file, "r") for data_file in DATA_FILES.values()]
 
-        data_array = np.ndarray
+        data_array = np.array([])
         data_list = []
         for file in zipfiles:  # Walk through all the years
             for filelist in file.filelist:  # Walk through all the regions
@@ -83,35 +85,73 @@ class DataDownloader:
                 except ValueError:
                     continue
                 if filename == REGIONS_NUMS[region]:
-                    logging.info(f"Processing {filelist.filename}.")
-                    print(f"Processing {filelist.filename} inside {file}.")
+                    logging.debug(f"Processing {filelist.filename} inside {file}.")
                     # Process all the records in the region
-
                     for i, row in enumerate(file.read(filelist.filename).decode('1250').split(
                             os.linesep)):
-                        if len(row.split(';')) != 64:
+                        row = row.split(';')
+                        if len(row) != 64:
                             continue
-                        data_list.append(row.split(';'))
-                    data_array = np.vstack(data_list)
+                        data_list.append(row)
+                    part_array = np.array(data_list)
+                    try:
+                        np.vstack((data_array, part_array))
+                    except ValueError:
+                        data_array = part_array
                     break  # There should be only one file for each region.
-                break
-
+            # Append the column with the region shortcut
             data_array = np.column_stack((data_array, (np.full(data_array.shape[0], REGIONS_NUMS[
                 region]))))
 
         return DATA_HEADER, data_array
 
-    def get_list(self, regions=REGIONS_NUMS.keys()):
+    def get_list(self, regions=None):
         """
         :param regions: A list of three-char shortcuts of regions to process. If None,
         all regions are processed.
         :return: Tuple of two lists, described above.
         """
-        print(regions)
+        if not regions:
+            REGIONS_NUMS.keys()
+        elif not isinstance(regions, list):
+            regions = [regions]
+
+        concat_array = np.array([])
+        for region in regions:
+            # Data are in the memory
+            if self.parsed_regions[region]:
+                logging.debug("Data tuple in attribute.")
+                array = self.parsed_regions[region]
+            # Data are not in the memory, but they are in cache files
+            elif self.cash_filename.format(region) in os.walk(os.getcwd()).__next__()[2]:
+                logging.debug("Data tuple in cache.")
+                with gzip.GzipFile(self.cash_filename.format(region), 'r') as f:
+                    array = pickle.load(f)
+            # Data are not in the memory nor in the cached files, they have to be parsed
+            else:
+                logging.debug("Data tuple must be parsed before.")
+                # Get data tuple
+                _, array = self.parse_region_data(region)
+                # Save data into a cache file
+                with gzip.GzipFile(self.cash_filename.format(region), 'w') as f:
+                    pickle.dump(array, f)
+            # For the first array of data, they will be rather saved into concat_array instead of
+            # appending into for that moment empty array.
+            try:
+                np.vstack((concat_array, array))
+            except ValueError:
+                concat_array = array
+
+        return DATA_HEADER, concat_array
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    # Start measuring time
+    start = time.perf_counter()
+
     downloader = DataDownloader()
 
-    with gzip.GzipFile(downloader.cash_filename.format("ej"), 'w') as f:
-        pickle.dump(downloader.parse_region_data("PHA"), f)
+    # End measuring time
+    end = time.perf_counter()
+    print(f"Time: {end - start:0.4f} s")
