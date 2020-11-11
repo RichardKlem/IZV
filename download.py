@@ -11,6 +11,8 @@ from zipfile import ZipFile
 import numpy as np
 
 from constants import DATA_FILES, DATA_HEADER, DATA_WEB_ROOT, REGIONS_NUMS
+from utils.logging import PROFILE_LOG_LEVEL
+from utils.logging import data_downloader_logger as ddl
 
 MIN_PYTHON = (3, 8)
 if sys.version_info < MIN_PYTHON:
@@ -85,7 +87,7 @@ class DataDownloader:
                 except ValueError:
                     continue
                 if filename == REGIONS_NUMS[region]:
-                    logging.debug(f"Processing {filelist.filename} inside {file}.")
+                    ddl.debug(f"Processing {filelist.filename} inside {file}.")
                     # Process all the records in the region
                     for i, row in enumerate(file.read(filelist.filename).decode('1250').split(
                             os.linesep)):
@@ -100,8 +102,7 @@ class DataDownloader:
                         data_array = part_array
                     break  # There should be only one file for each region.
             # Append the column with the region shortcut
-            data_array = np.column_stack((data_array, (np.full(data_array.shape[0], REGIONS_NUMS[
-                region]))))
+            data_array = np.column_stack((data_array, (np.full(data_array.shape[0], region))))
 
         return DATA_HEADER, data_array
 
@@ -120,38 +121,38 @@ class DataDownloader:
         for region in regions:
             # Data are in the memory
             if self.parsed_regions[region]:
-                logging.debug("Data tuple in attribute.")
+                ddl.debug("Data tuple in attribute.")
                 array = self.parsed_regions[region]
             # Data are not in the memory, but they are in cache files
-            elif self.cash_filename.format(region) in os.walk(os.getcwd()).__next__()[2]:
-                logging.debug("Data tuple in cache.")
-                with gzip.GzipFile(self.cash_filename.format(region), 'r') as f:
+            elif self.cash_filename.format(region) in os.walk(self.folder).__next__()[2]:
+                ddl.debug("Data tuple in cache.")
+                with gzip.GzipFile(self.folder + self.cash_filename.format(region), 'r') as f:
                     array = pickle.load(f)
             # Data are not in the memory nor in the cached files, they have to be parsed
             else:
-                logging.debug("Data tuple must be parsed before.")
+                ddl.debug("Data tuple must be parsed before.")
                 # Get data tuple
                 _, array = self.parse_region_data(region)
                 # Save data into a cache file
-                with gzip.GzipFile(self.cash_filename.format(region), 'w') as f:
+                with gzip.GzipFile(self.folder + self.cash_filename.format(region), 'w') as f:
                     pickle.dump(array, f)
             # For the first array of data, they will be rather saved into concat_array instead of
             # appending into for that moment empty array.
             try:
-                np.vstack((concat_array, array))
+                concat_array = np.vstack((concat_array, array))
             except ValueError:
                 concat_array = array
-
         return DATA_HEADER, concat_array
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     # Start measuring time
     start = time.perf_counter()
 
     downloader = DataDownloader()
+    print(downloader.get_list(["PHA", "JHM"]))
 
     # End measuring time
     end = time.perf_counter()
-    print(f"Time: {end - start:0.4f} s")
+    ddl.profile(f"Time: {end - start:0.4f} s")
